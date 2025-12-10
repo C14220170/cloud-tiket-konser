@@ -3,54 +3,44 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
-use SimpleSoftwareIO\QrCode\Facades\QrCode;
 use App\Models\Order;
+use SimpleSoftwareIO\QrCode\Facades\QrCode;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Auth;
 
 class TicketController extends Controller
 {
-    use AuthorizesRequests;
-
-    public function index(Request $req)
+    public function index(Request $request)
     {
-        $orders = $req->user()->orders()
-            ->where('status','paid')
-            ->with('items.ticketType')
+        $user = $request->user();
+
+        $orders = $user->orders()
+            ->with('event')
             ->latest()
             ->get();
 
         return view('tickets.index', compact('orders'));
     }
 
-    public function show(Request $req, Order $order)
+    public function show(Order $order)
     {
-        $this->authorize('view', $order);
-
-        // Load relasi agar tidak null
-        $order->load('items.ticketType.event');
-
-        $content = null;
-        if($order->ticket_path && Storage::disk('public')->exists($order->ticket_path)){
-            $content = Storage::disk('public')->get($order->ticket_path);
+        if ($order->user_id !== Auth::id()) { 
+            abort(403, 'Unauthorized action.');
         }
 
-        // QR Code generator (tanpa Imagick)
-        $qrPath = "qrcodes/order-{$order->id}.svg";
+        if (!$order->qr_code) {
+            
+            $qrContent = "ORDER-{$order->id}-USER-" . Auth::id();
+            
+            $fileName = "qrcodes/order-{$order->id}.svg";
+            
+            $qrImage = QrCode::format('svg')->size(300)->generate($qrContent);
+            
+            Storage::disk('public')->put($fileName, $qrImage);
 
-        if (!Storage::disk('public')->exists($qrPath)) {
-            Storage::disk('public')->put(
-                $qrPath,
-                \SimpleSoftwareIO\QrCode\Facades\QrCode::format('svg')
-                    ->size(260)
-                    ->margin(1)
-                    ->generate("VERIFY-TICKET-ORDER-{$order->id}")
-            );
+            $order->update(['qr_code' => $fileName]);
         }
 
-        $qrUrl = asset('storage/' . $qrPath);
-
-        return view('tickets.show', compact('order','content','qrUrl'));
+        return view('tickets.show', compact('order'));
     }
-
 }
